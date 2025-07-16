@@ -2,77 +2,103 @@
 // Instituto Don Orione
 // Prof. Juan Carlos Torres
 
-// Para matriz de leds
-#include <MD_MAX72xx.h>
-#include <MD_Parola.h>
-// Para WiFi
+// Libreria para soporte Wi-Fi
 #include <WiFi.h>
-#include <WiFiClient.h>
-// Libreria MQTT
+// MQTT
 #include <PubSubClient.h>
-// Libreria para soporte Json v7
+// Libreria para soporte Json version 7
 #include <ArduinoJson.h>
+// DHT22
+#include <DHTesp.h>
 
-#define HARDWARE_TYPE MD_MAX72XX::PAROLA_HW
-#define DATA_PIN    23 // MOSI
-#define CLK_PIN     18 // SCK
-#define CS_PIN      5  // SS
-#define MAX_DEVICES 8
-#define MQTT_PORT   1883
-// pulsador amarillo (rele 1)
-#define P1  34
-// pulsador azul (rele 2)
-#define P2  35
-// pulsador verde (reset)
-#define P3 32
-#define RELE_1 33
-#define RELE_2 25
+// Publicacion
+const char* topic_pub = "proyecto_2025/esp32";
+// Subscripcion
+const char* topic_sub = "kodular";
 
-// variables globales mqtt
+// Credenciales Wi-Fi
+const char* ssid = "Wokwi-GUEST";
+const char* password = "";
+
+// Broker MQTT
 const char* mqtt_server = "broker.hivemq.com";
-// topico publicacion
-const char* topic_pub = "ido_pyde/esp32";
-// topico suscripcion (mensaje a mostrar)
-const char* topic_sub = "ido_pyde/texto";
 
-#define WIFI_SSID "Wokwi-GUEST"
-#define WIFI_PASSWORD ""
-// se define canal para acelerar la conexion
-#define WIFI_CHANNEL 6
+// Matriz de leds basada en Max7219
+#include <MD_Parola.h>
+#include <MD_MAX72xx.h>
+#include <SPI.h>
+#define HARDWARE_TYPE MD_MAX72XX::PAROLA_HW
+#define MAX_DEVICES 4
+#define CS_PIN 5
+// Conexion SPI
+MD_Parola Pantalla = MD_Parola (HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
 
-MD_Parola P = MD_Parola (HARDWARE_TYPE, CS_PIN, MAX_DEVICES); // Conexion SPI
+// Pulsadores
+#define PULSADOR_LED1 22
+#define PULSADOR_LED2 4
+#define PULSADOR_RESET 15
 
-bool Boton1 = false; // amarillo
-bool Boton2 = false; // azul
-bool Boton3 = false; // verde
+// Leds
+#define LED1 32
+#define LED2 27
+
+// Configuración del DHT22
+#define DHT_PIN 13
+#define DHT_TYPE DHT22
+// DHT dht (DHT_PIN, DHTT_YPE);
+DHTesp dht;
+
+// Variables globales
+bool EstadoP1 = false;
+bool EstadoP2 = false;
+bool EstadoReset = false;
 String Mensaje = "-";
-bool Rele1 = false;
-bool Rele2 = false;
+bool EstadoLed1 = false;
+bool EstadoLed2 = false;
+unsigned long UltimaLectura = 0;
+const long Intervalo = 2000; // para lectura DHT
+float Temperatura;
+float Humedad;
 
-WiFiClient clienteWiFi;
-PubSubClient clienteMQTT (clienteWiFi);
+WiFiClient espClient;
+PubSubClient clienteMQTT (espClient);
 
-void publicar ()
+void configurarWiFi () {
+  delay(100);
+  Serial.print ("Conectando a red Wi-Fi: ");
+  Serial.print (ssid);
+  WiFi.begin (ssid, password);
+  while (WiFi.status () != WL_CONNECTED) {
+    delay (300);
+    Serial.print (".");
+  }
+  randomSeed (micros());
+  Serial.println ("");
+  Serial.print ("Conexion exitosa, ");
+  Serial.print ("IP: ");
+  Serial.println (WiFi.localIP());
+}
+void publicarMQTT ()
 {
-  // publicacion en topico
+  // envia actulizacion de estado por MQTT
   StaticJsonDocument<300> JSONdoc;
   JsonObject JSONencoder = JSONdoc.to<JsonObject>();
 
-  JSONencoder["relay1"] = Rele1;
-  JSONencoder["relay2"] = Rele2;
+  JSONencoder["relay1"] = EstadoLed1;
+  JSONencoder["relay2"] = EstadoLed2;
   JSONencoder["led"] = Mensaje;
 
-  char JSONmessageBuffer [100];
+  char JSONmessageBuffer[100];
   serializeJson (JSONdoc, JSONmessageBuffer);
   clienteMQTT.publish (topic_pub, JSONmessageBuffer);
-  Serial.print ("Enviando estado: ");
+  Serial.print ("Enviando JSON: ");
   Serial.println (JSONmessageBuffer);
   Serial.println ("=======================");
 }
 
-void callback (char* topic, byte* payload, unsigned int length)
+void recibirMQTT (char* topic, byte* payload, unsigned int length)
 {
-  // recibe un mensaje de un topico suscrito
+  // Recibe mensaje del topico suscrito
   Serial.print ("Mensaje recibido en topico: ");
   Serial.println (topic);
   String json_received;
@@ -82,211 +108,209 @@ void callback (char* topic, byte* payload, unsigned int length)
     //Serial.print((char)payload[i]);
   }
   Serial.println (json_received);
-  // actualizacion estado a la app
+  // en caso de recibir el comando 'status', se envia actualizacion
   if (json_received == "status")
-    publicar();
+      publicarMQTT ();
   else
   {
-    //Parse json
+    // Parsear json
     JsonDocument root;
     deserializeJson(root, json_received);
+
+    //get json parsed value
     //sample of json: {"device":"relay1","status":true}
     //sample of json: {"device":"led","text":"Text display"}
-    Serial.print("Comando: ");
+    Serial.print ("Commando: ");
     String device = root["device"];
     String trigger;
-    // Rele 1
+    // LED1
     if (device == "relay1") {
       if (root["status"] == true) {
-        // enciende
-        digitalWrite (RELE_1, HIGH);
+        // encender
+        digitalWrite (LED1, HIGH);
         trigger = "ON";
-        Rele1 = true;
+        EstadoLed1 = true;
       }
       else {
-        // apaga
-        digitalWrite (RELE_1, LOW);
+        // apagar
+        digitalWrite (LED1, LOW);
         trigger = "OFF";
-        Rele1 = false;
+        EstadoLed1 = false;
       }
-      bool status_relay = root["status"]; // REVISAR
-      Serial.println ("Turn " + trigger + " " + device);
+      Serial.println ("Estado " + device + ": " + trigger);
     }
-    // Rele 2
+    // LED2
     if (device == "relay2") {
-      if (root["status"] == true) {
-        // enciende
-        digitalWrite (RELE_2, HIGH);
+      if (root["status"] == true)
+      {
+        // encender
+        digitalWrite (LED2, HIGH);
         trigger = "ON";
-        Rele2 = true;
+        EstadoLed2 = true;
       }
       else {
-        // apaga
-        digitalWrite (RELE_2, LOW);
+        digitalWrite (LED2, HIGH);
         trigger = "OFF";
-        Rele2 = false;
+        EstadoLed2 = false;
       }
-      bool status_relay = root["status"];
-      Serial.println("Turn " + trigger + " " + device);
+      Serial.println("Estado " + device + ": " + trigger);
     }
-    // matriz de leds
+    // Pantalla
     if (device == "led") {
-      // mostrar mensaje
+      // Mostrar texto
       Mensaje = root["text"].as<const char*>();
       Serial.println ("Texto a mostrar: " + Mensaje);
     }
-    // envia actualizacion mqtt
-    publicar ();
+    // Publicar estado
+    publicarMQTT();
   }
 }
 
-void reconectar () 
-{
-  while (!clienteMQTT.connected())
-  {
-    Serial.print ("Intentando conexion MQTT con ");
-    Serial.print (mqtt_server);
-    Serial.print ("... ");
-    // random client ID
+void reconectarMQTT () {
+  // Esperar a reconexion
+  while (!clienteMQTT.connected()) {
+    Serial.println ("Intentando conexion MQTT... ");
+    // genero un ID aleatorio
     String clientId = "IDO-";
     clientId += String (random(0xffff), HEX);
+
     // if (client.connect(clientId,userName,passWord))
-    if (clienteMQTT.connect(clientId.c_str()))
-    {
-      Serial.print ("Conexion exitosa [");
-      Serial.print (clientId.c_str());
-      Serial.println ("]");
-      // suscripcion a topico
-      clienteMQTT.subscribe (topic_sub);
+    if (clienteMQTT.connect (clientId.c_str())) {
+      clienteMQTT.subscribe (topic_sub); // subscripcion a topico
+      Serial.print ("Conectado a: ");
+      Serial.println (mqtt_server);
+      Serial.println ("Cliente MQTT generado: " + clientId);
       Serial.print ("Suscrito a topico: ");
       Serial.println (topic_sub);
     } else {
-      Serial.print ("[Error =");
+      Serial.print ("Error = ");
       Serial.print (clienteMQTT.state());
-      Serial.print ("]");
-      Serial.println (" Reintentando en 5 segundos...");
-      delay(5000);
+      Serial.println (", reintentando en 5 seg...");
+      delay (5000);
     }
   }
 }
 
-void setup (void)
-{
+void setup() {
+  
   Serial.begin (115200);
+  Pantalla.begin (); // matriz leds
+  dht.setup (DHT_PIN, DHTesp::DHT22);
+  //dht.begin (); // sensor DHT22
+  configurarWiFi ();
 
-  WiFi.begin (WIFI_SSID, WIFI_PASSWORD, WIFI_CHANNEL);
-  Serial.print ("Conectando a WiFi: ");
-  Serial.print (WIFI_SSID);
-  // Espera conexion Wi-Fi
-  while (WiFi.status () != WL_CONNECTED) {
-    delay (500);
-    Serial.print (".");
-  }
-  Serial.print (" Conectado!");
-  Serial.print ("(IP: ");
-  Serial.print (WiFi.localIP());
-  Serial.println (")");
-
-  clienteMQTT.setServer (mqtt_server, MQTT_PORT);
-  clienteMQTT.setCallback (callback);
+  // inicializa cliente MQTT
+  clienteMQTT.setServer (mqtt_server, 1883);
+  clienteMQTT.setCallback (recibirMQTT);
   clienteMQTT.subscribe (topic_sub);
 
-  // Pines
-  pinMode (P1, INPUT_PULLUP);
-  pinMode (P2, INPUT_PULLUP);
-  pinMode (P3, INPUT_PULLUP);
-  pinMode (RELE_1, OUTPUT);
-  pinMode (RELE_2, OUTPUT);
+  // pulsadores
+  pinMode (PULSADOR_LED1, INPUT_PULLUP);
+  pinMode (PULSADOR_LED2, INPUT_PULLUP);
+  pinMode (PULSADOR_RESET, INPUT_PULLUP);
 
-  // inicia con reles apagados
-  digitalWrite (RELE_1, LOW);
-  digitalWrite (RELE_2, LOW);
+  // Leds
+  pinMode (LED1, OUTPUT);
+  pinMode (LED2, OUTPUT);
 
-  // actualizacion estado MQTT
-  publicar ();
+  publicarMQTT ();
 }
 
 void loop() {
-
+  // si se desconecto intento nuevamente
   if (!clienteMQTT.connected ())
-    reconectar ();
+    reconectarMQTT ();
 
   clienteMQTT.loop ();
+
+  // Leer DHT22 cada 2 segundos
+  if (millis() - UltimaLectura >= Intervalo) {
+    TempAndHumidity lecturaDHT = dht.getTempAndHumidity ();
+    Temperatura = lecturaDHT.temperature;
+    Humedad = lecturaDHT.humidity;
+    UltimaLectura = millis();
+    Serial.print ("Humedad: ");
+    Serial.println (Humedad);
+    Serial.print ("Temperatura: ");
+    Serial.println (Temperatura);
+  }
+
+  // Lectura pulsadores
+  bool pulsadorLed1 = !digitalRead (PULSADOR_LED1);
+  bool pulsadorLed2 = !digitalRead (PULSADOR_LED2);
+  bool pulsadorReset = !digitalRead (PULSADOR_RESET);
+
+  // LED1
+  if (pulsadorLed1) {
+    if (EstadoP1 == false) {
+      if (EstadoLed1 == false) {
+        // encender
+        digitalWrite (LED1, HIGH);
+        EstadoLed1 = true;
+      }
+      else {
+        // apagar
+        digitalWrite (LED1, LOW);
+        EstadoLed1 = false;
+      }
+      // toggleo variable
+      EstadoP1 = true;
+      publicarMQTT ();
+      delay (300); // antirrebote
+    }
+  }
+  else {
+    if (EstadoP1)
+      EstadoP1 = false;
+  }
+  // LED 2
+  if (pulsadorLed2) {
+    if (EstadoP2 == false) {
+      if (EstadoLed2 == false) {
+        // enciendo
+        digitalWrite (LED2, HIGH);
+        EstadoLed2 = true;
+      }
+      else {
+        // apago
+        digitalWrite (LED2, LOW);
+        EstadoLed2 = false;
+      }
+      // toggleo variable
+      EstadoP2 = true;
+      publicarMQTT ();
+      delay (300);
+    }
+  }
+  else {
+    if (EstadoP2 == true)
+      EstadoP2 = false;
+  }
   
-  bool sePulsoP1 = !digitalRead (P1);
-  bool sePulsoP2 = !digitalRead (P2);
-  bool sePulsoP3 = !digitalRead (P3);
-
-  // Pulsador 1 (amarillo/rele 1)
-  if (sePulsoP1) {
-    if (Boton1 == false) {
-      Boton1 = true; // para reflejar el cambio en la app
-      if (Rele1 == false) {
-        // activo rele 1
-        digitalWrite (RELE_1, HIGH);
-        Rele1 = true;
-      }
-      else {
-        // apago rele 1
-        digitalWrite (RELE_1, LOW);
-        Rele1 = false;
-      }
-      delay (100); // antirrebote
-      publicar ();
-    }
-  }
-  else {
-    if (Boton1 == true)
-      Boton1 = false;
-  }
-
-  // Pulsador 2 (azul/rele 2)
-  if (sePulsoP2) {
-    if (Boton2 == false) {
-      Boton2 = true; // para reflejar el cambio en la app
-      if (Rele2 == false) {
-        // activo rele 2
-        digitalWrite (RELE_2, HIGH);
-        Rele2 = true;
-      }
-      else {
-        // apago rele 2
-        digitalWrite (RELE_2, LOW);
-        Rele2 = false;
-      }
-      Boton2 = true;
-      delay (100); // antirrebote
-      publicar ();
-    }
-  }
-  else {
-    if (Boton2 == true)
-      Boton2 = false;
-  }
-
-  // Pulsador 3 (verde/reset)
-  if (sePulsoP3) {
-    if (Boton3 == false) {
-      // limpio pantalla
-      Boton3 = true;
+  // Limpiar pantalla
+  if (pulsadorReset) {
+    Serial.println ("Reset");
+    if (EstadoReset == false) {
+      EstadoReset = true;
       Mensaje = "-";
-      P.print ("-");
-      delay (100); // antirrebote
-      publicar ();
+      Pantalla.print ("-");
+      publicarMQTT ();
+      delay (300);
     }
   }
   else {
-    if (Boton3 == true)
-      Boton3 = false;
+    if (EstadoReset == true)
+      EstadoReset = false;
   }
 
-  //Show Text in LED Matrix
-  if (Mensaje.length () < 10) {
-    P.setTextAlignment (PA_CENTER);
-    P.print (Mensaje.c_str ());
+  // Mostrar mensaje
+  // si es un mensaje corto, lo centra
+  if (Mensaje.length() < 10) {
+    Pantalla.setTextAlignment (PA_CENTER);
+    Pantalla.print (Mensaje.c_str());
   }
   else {
-    if (P.displayAnimate ())
-      P.displayText (Mensaje.c_str (), PA_LEFT, 100, 100, PA_SCROLL_LEFT, PA_SCROLL_LEFT);
+    if (Pantalla.displayAnimate())
+      Pantalla.displayText (Mensaje.c_str(), PA_LEFT, 100, 100, PA_SCROLL_LEFT, PA_SCROLL_LEFT);
   }
 }

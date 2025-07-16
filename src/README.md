@@ -1,11 +1,14 @@
-# Youtube Video
-Watch the video below for a full explanation:
+# Proyecto y Diseño Electrónico 2025
+Proyecto de ejemplo utilizando:
+- ESP32
+- Sensor DHT22
+- Pantalla de matriz de LEDs basada en MAX7219
+- Dos Leds con sus respectivos pulsadores
+- Protocolo MQTT para paso de mensajes
+- Broker HiveMQ
+- Compilador PlatformIO
+- Simulador Wokwi
+- VSCode como entorno de desarrollo
+- Aplicación desarrollada en Kodular para enviar mensajes
 
-<p align="center">
-  <a href="https://www.youtube.com/watch?v=Bq5l2oh9Fvk" target="_blank">
-    <img src="https://img.youtube.com/vi/Bq5l2oh9Fvk/0.jpg" alt="YouTube Video Thumbnail" width="480" />
-  </a>
-</p>
-
-Click the image above to watch the video.
-
+El objetivo es leer temperatura y humedad del DHT22, enviar estos datos a través de MQTT, y mostrar un mensaje enviado desde la app de Kodular en la matriz de LEDs MAX7219.
