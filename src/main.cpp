@@ -12,9 +12,9 @@
 #include <DHTesp.h>
 
 // Publicacion
-const char* topic_pub = "proyecto_2025/esp32";
+const char* topic_pub = "ido/esp32";
 // Subscripcion
-const char* topic_sub = "kodular";
+const char* topic_sub = "ido/kodular";
 
 // Credenciales Wi-Fi
 const char* ssid = "Wokwi-GUEST";
